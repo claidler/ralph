@@ -720,4 +720,190 @@ func (s *RalphSession) execute(prompt string) (stdout, stderr string, exitCode i
 	return
 }
 
-func (s *RalphSession) has
+func printUsage() {
+	fmt.Fprintf(os.Stderr, "Usage: ralph [--max N] [--rm] <tool> <task1> [task2 ...]\n")
+	fmt.Fprintf(os.Stderr, "\nTools: claude, codex, gemini, copilot (or any executable)\n")
+	fmt.Fprintf(os.Stderr, "\nOptions:\n")
+	fmt.Fprintf(os.Stderr, "  --max, -m N    Maximum loop iterations (default %d)\n", DefaultMaxLoops)
+	fmt.Fprintf(os.Stderr, "  --rm           Remove log file on exit\n")
+}
+
+func newRalphSession(toolName, successToken string, maxLoops int, keepLog bool, tasks []Task) (*RalphSession, error) {
+	f, err := os.Create(ProgressFileName)
+	if err != nil {
+		return nil, fmt.Errorf("create log file: %w", err)
+	}
+
+	s := &RalphSession{
+		File:         f,
+		ToolName:     toolName,
+		SuccessToken: successToken,
+		MaxLoops:     maxLoops,
+		StartTime:    time.Now(),
+		KeepLog:      keepLog,
+		Tasks:        tasks,
+		FailureCount: make(map[string]int),
+	}
+
+	f.WriteString(fmt.Sprintf("# Ralph Session — %s\n\n", s.StartTime.Format(time.RFC3339)))
+	f.WriteString(fmt.Sprintf("- Agent: %s\n", toolName))
+	f.WriteString(fmt.Sprintf("- Tasks: %d\n", len(tasks)))
+	f.WriteString(fmt.Sprintf("- Max loops: %d\n\n", maxLoops))
+
+	return s, nil
+}
+
+func (s *RalphSession) close() {
+	if s.File != nil {
+		s.File.Close()
+	}
+	if !s.KeepLog {
+		os.Remove(s.File.Name())
+	}
+}
+
+func (s *RalphSession) printTaskList() {
+	for i, t := range s.Tasks {
+		marker := "⬜"
+		if t.Status == TaskCompleted {
+			marker = "✅"
+		}
+		fmt.Printf("  %s %d. %s\n", marker, i+1, t.Description)
+	}
+}
+
+func (s *RalphSession) hasSuccessToken(stdout string) bool {
+	return strings.Contains(stdout, s.SuccessToken)
+}
+
+func (s *RalphSession) extractFailureFull(stderr, stdout string) string {
+	if strings.TrimSpace(stderr) != "" {
+		return stderr
+	}
+	return stdout
+}
+
+func (s *RalphSession) tokenMissingContext(stdout, errorContext string) string {
+	preview := stdout
+	if len(preview) > MaxOutputPreview {
+		preview = preview[len(preview)-MaxOutputPreview:]
+	}
+	return fmt.Sprintf("Exit 0 but missing %s token.\n\nTail of stdout:\n%s\n\n%s",
+		s.SuccessToken, preview, errorContext)
+}
+
+func failureSignature(errorContext string) string {
+	lines := strings.Split(strings.TrimSpace(errorContext), "\n")
+	// Use the last non-empty line as the signature seed.
+	sig := ""
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			sig = line
+			break
+		}
+	}
+	if sig == "" {
+		sig = "(empty output)"
+	}
+	if len(sig) > MaxSignatureLen {
+		sig = sig[:MaxSignatureLen]
+	}
+	return sig
+}
+
+func (s *RalphSession) logIterationStart(attemptNum int, prompt, mutationNotes string) {
+	preview := prompt
+	if len(preview) > MaxPromptPreview {
+		preview = preview[:MaxPromptPreview] + "…"
+	}
+	sum := sha256.Sum256([]byte(prompt))
+	hash := hex.EncodeToString(sum[:])[:12]
+
+	entry := fmt.Sprintf("\n---\n## Iteration %d (Task %d, Attempt %d)\n\n"+
+		"- Time: %s\n"+
+		"- Prompt hash: %s\n"+
+		"- Mutation: %s\n"+
+		"- Prompt preview: %s\n\n",
+		s.GlobalIteration, s.CurrentTaskIdx+1, attemptNum,
+		time.Now().Format(time.RFC3339),
+		hash,
+		mutationNotes,
+		preview,
+	)
+	s.File.WriteString(entry)
+}
+
+func (s *RalphSession) logSuccess(duration time.Duration, stdout string) {
+	preview := stdout
+	if len(preview) > MaxOutputPreview {
+		preview = "…" + preview[len(preview)-MaxOutputPreview:]
+	}
+	entry := fmt.Sprintf("### ✅ Success\n\n- Duration: %s\n- Output tail: %s\n\n",
+		duration, preview)
+	s.File.WriteString(entry)
+}
+
+func (s *RalphSession) logMutationSummary() {
+	if len(s.CurrentAttempts) == 0 {
+		return
+	}
+	var b strings.Builder
+	b.WriteString("### Mutation history (this task)\n\n")
+
+	sigCounts := make(map[string]int)
+	for _, a := range s.CurrentAttempts {
+		sigCounts[a.ErrorSig]++
+	}
+
+	keys := make([]string, 0, len(sigCounts))
+	for k := range sigCounts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		b.WriteString(fmt.Sprintf("- %q × %d\n", k, sigCounts[k]))
+	}
+	b.WriteString("\n")
+	s.File.WriteString(b.String())
+}
+
+func (s *RalphSession) logFailure(attemptNum int, duration time.Duration, exitCode int, errorContext string) {
+	preview := errorContext
+	if len(preview) > MaxFailCtxPreview {
+		preview = "…" + preview[len(preview)-MaxFailCtxPreview:]
+	}
+	entry := fmt.Sprintf("### ❌ Failed\n\n"+
+		"- Exit code: %d\n"+
+		"- Duration: %s\n"+
+		"- Signature: %s\n"+
+		"- Repeat streak: %d\n"+
+		"- Error preview:\n```\n%s\n```\n\n",
+		exitCode, duration, failureSignature(errorContext), s.RepeatStreak, preview)
+	s.File.WriteString(entry)
+}
+
+func (s *RalphSession) logFinish(reason, note string) {
+	s.FinishReason = reason
+	s.FinishNote = note
+	s.FinishTime = time.Now()
+
+	totalDur := s.FinishTime.Sub(s.StartTime).Round(time.Second)
+	completed := 0
+	for _, t := range s.Tasks {
+		if t.Status == TaskCompleted {
+			completed++
+		}
+	}
+
+	entry := fmt.Sprintf("\n---\n## Finished\n\n"+
+		"- Reason: %s\n"+
+		"- Note: %s\n"+
+		"- Tasks: %d/%d completed\n"+
+		"- Total time: %s\n"+
+		"- Finished: %s\n\n",
+		reason, note, completed, len(s.Tasks), totalDur,
+		s.FinishTime.Format(time.RFC3339))
+	s.File.WriteString(entry)
+}

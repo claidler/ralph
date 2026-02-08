@@ -1,0 +1,7 @@
+# Binary
+ralph
+*.exe
+
+# Ralph state
+.ralph/
+.ralph-progress.md
