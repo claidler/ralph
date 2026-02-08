@@ -33,11 +33,11 @@ const (
 	RalphDirName      = ".ralph"
 	RalphTaskFile     = "TASK.md"
 	RalphProgressFile = "PROGRESS.md"
-	RalphErrorFile    = "ERROR.md"      // latest full error/output
-	RalphContextFile  = "CONTEXT.md"    // lightweight git context
-	RalphStateFile    = "STATE.md"      // durable environment state (NOT overwritten)
-	RalphAttemptsDir  = "attempts"      // per-attempt full transcripts
-	RalphAttemptExt   = ".log"          // attempt-0001.log, etc.
+	RalphErrorFile    = "ERROR.md"   // latest full error/output
+	RalphContextFile  = "CONTEXT.md" // lightweight git context
+	RalphStateFile    = "STATE.md"   // durable environment state (NOT overwritten)
+	RalphAttemptsDir  = "attempts"   // per-attempt full transcripts
+	RalphAttemptExt   = ".log"       // attempt-0001.log, etc.
 )
 
 type TaskStatus int
@@ -254,6 +254,7 @@ DoneParsing:
 			session.LastPrompt = ""
 
 			session.CurrentTaskIdx++
+			session.writeRalphFiles()
 			if session.CurrentTaskIdx < len(session.Tasks) {
 				fmt.Printf("📝 Moving to task %d...\n", session.CurrentTaskIdx+1)
 				time.Sleep(1 * time.Second)
@@ -273,6 +274,7 @@ DoneParsing:
 
 		sig := failureSignature(errorContext)
 		session.recordAttempt(attemptNum, prompt, exitCode, duration, sig, errorContext, mutationNotes)
+		session.writeRalphFiles()
 
 		fmt.Printf("\n❌ Failed (exit %d) after %s\n", exitCode, duration)
 		fmt.Printf("🧩 Signature: %s\n", sig)
@@ -527,16 +529,16 @@ func (s *RalphSession) writeLatestErrorFile() {
 }
 
 func (s *RalphSession) renderTaskFile() string {
-	if s.CurrentTaskIdx >= len(s.Tasks) {
-		return "# TASK\n\n(no current task)\n"
-	}
-
 	var b strings.Builder
 	b.WriteString("# TASK\n\n")
 	b.WriteString("## Current\n\n")
-	b.WriteString("- ")
-	b.WriteString(s.Tasks[s.CurrentTaskIdx].Description)
-	b.WriteString("\n\n")
+	if s.CurrentTaskIdx >= len(s.Tasks) {
+		b.WriteString("(no current task)\n\n")
+	} else {
+		b.WriteString("- ")
+		b.WriteString(s.Tasks[s.CurrentTaskIdx].Description)
+		b.WriteString("\n\n")
+	}
 
 	b.WriteString("## Completed\n\n")
 	found := false
@@ -567,7 +569,11 @@ func (s *RalphSession) renderProgressFile() string {
 	b.WriteString("# PROGRESS\n\n")
 	b.WriteString(fmt.Sprintf("- Time: %s\n", time.Now().Format(time.RFC3339)))
 	b.WriteString(fmt.Sprintf("- Global iteration: %d\n", s.GlobalIteration))
-	b.WriteString(fmt.Sprintf("- Task: %d/%d\n\n", s.CurrentTaskIdx+1, len(s.Tasks)))
+	taskNumber := s.CurrentTaskIdx + 1
+	if taskNumber > len(s.Tasks) {
+		taskNumber = len(s.Tasks)
+	}
+	b.WriteString(fmt.Sprintf("- Task: %d/%d\n\n", taskNumber, len(s.Tasks)))
 
 	if s.CurrentTaskIdx < len(s.Tasks) {
 		b.WriteString("## Current task\n\n")
