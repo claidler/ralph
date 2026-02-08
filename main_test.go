@@ -164,7 +164,9 @@ func TestStatusEventJSON(t *testing.T) {
 
 	// Verify omitempty fields are absent when zero
 	var m map[string]interface{}
-	json.Unmarshal(data, &m)
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
 
 	if _, ok := m["message"]; ok {
 		t.Error("message should be omitted when empty")

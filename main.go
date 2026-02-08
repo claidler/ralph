@@ -30,7 +30,7 @@ const (
 
 // StatusEvent represents a machine-readable status update written to the status file.
 type StatusEvent struct {
-	Event     string `json:"event"`               // "iteration_start", "iteration_end", "complete", "cancelled", "error"
+	Event     string `json:"event"`               // "iteration_start", "iteration_end", "complete", "cancelled"
 	Iteration int    `json:"iteration"`            // Current iteration number (1-based)
 	Agent     string `json:"agent"`                // Agent name
 	Timestamp string `json:"timestamp"`            // RFC3339 timestamp
