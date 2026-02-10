@@ -23,7 +23,7 @@ const (
 
 func main() {
 	// Parse flags
-	agentPtr := flag.String("agent", "claude", "The AI agent to use (claude, gemini, copilot, codex, vibe)")
+	agentPtr := flag.String("agent", "claude", "The AI agent to use (claude, gemini, copilot, codex, vibe, opencode)")
 	checkCmdPtr := flag.String("check", "", "The verification command (e.g., 'go test ./...'). Loop stops when this passes.")
 	flag.Parse()
 
@@ -145,6 +145,9 @@ func runAgent(ctx context.Context, agent string, prompt string) (string, error) 
 	case "vibe":
 		// Mistral Vibe: Uses --prompt argument and --agent auto-approve for headless mode
 		cmd = exec.CommandContext(ctx, "vibe", "--prompt", prompt, "--agent", "auto-approve")
+	case "opencode":
+		// OpenCode: Uses run command with prompt, auto-approves by default
+		cmd = exec.CommandContext(ctx, "opencode", "run", prompt)
 	default:
 		return "", fmt.Errorf("unknown agent: %s", agent)
 	}
